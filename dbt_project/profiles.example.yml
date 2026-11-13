@@ -1,0 +1,17 @@
+# Template for ~/.dbt/profiles.yml (Never commit credentials to git)
+# Copy this file to ~/.dbt/profiles.yml and populate with your Snowflake details.
+
+sales_pipeline:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role: SALES_DEV_ROLE
+      database: SALES_DW
+      warehouse: SALES_WH
+      schema: PUBLIC
+      threads: 4
+      client_session_keep_alive: False

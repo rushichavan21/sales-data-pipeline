@@ -1,0 +1,28 @@
+name: 'sales_pipeline'
+version: '1.0.0'
+config-version: 2
+
+# Profile matches ~/.dbt/profiles.yml
+profile: 'sales_pipeline'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  sales_pipeline:
+    # Staging models are lightweight views cleaning source data
+    staging:
+      +materialized: view
+      +schema: STAGING
+    # Marts models are Kimball Star Schema analytical tables
+    marts:
+      +materialized: table
+      +schema: MARTS

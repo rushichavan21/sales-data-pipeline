@@ -1,0 +1,108 @@
+version: 2
+
+models:
+  - name: dim_date
+    description: "Conformed date dimension table spanning 2020 through 2030."
+    columns:
+      - name: date_key
+        description: "Integer surrogate primary key in YYYYMMDD format."
+        tests:
+          - unique
+          - not_null
+      - name: calendar_date
+        description: "Calendar date object"
+        tests:
+          - unique
+          - not_null
+      - name: is_weekend
+        description: "Boolean indicating Saturday or Sunday"
+        tests:
+          - not_null
+
+  - name: dim_customer
+    description: "Conformed customer dimension table."
+    columns:
+      - name: customer_key
+        description: "Surrogate primary key (MD5 hash of customer_id)"
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: "Natural business customer identifier"
+        tests:
+          - unique
+          - not_null
+      - name: segment
+        description: "Customer market segment"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Consumer', 'Corporate', 'Home Office']
+
+  - name: dim_product
+    description: "Conformed product dimension table."
+    columns:
+      - name: product_key
+        description: "Surrogate primary key (MD5 hash of product_id)"
+        tests:
+          - unique
+          - not_null
+      - name: product_id
+        description: "Product SKU identifier"
+        tests:
+          - unique
+          - not_null
+      - name: category
+        description: "Product high-level category"
+        tests:
+          - not_null
+      - name: sub_category
+        description: "Product sub-category"
+        tests:
+          - not_null
+
+  - name: fact_sales
+    description: "Central sales transactions fact table at the grain of 1 order line item."
+    columns:
+      - name: sales_item_key
+        description: "Surrogate primary key of the fact record (MD5 hash of order_id and product_id)"
+        tests:
+          - unique
+          - not_null
+      - name: customer_key
+        description: "Foreign key joining to dim_customer"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_key
+      - name: product_key
+        description: "Foreign key joining to dim_product"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_product')
+              field: product_key
+      - name: order_date_key
+        description: "Foreign key joining to dim_date"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: sales_amount
+        description: "Total revenue for the line item"
+        tests:
+          - not_null
+      - name: quantity
+        description: "Units sold"
+        tests:
+          - not_null
+      - name: cost_amount
+        description: "Calculated item cost"
+        tests:
+          - not_null
+      - name: profit_amount
+        description: "Item net profit or loss"
+        tests:
+          - not_null

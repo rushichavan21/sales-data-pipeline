@@ -1,0 +1,35 @@
+version: 2
+
+models:
+  - name: stg_sales
+    description: "Cleaned and standardized view of retail sales orders."
+    columns:
+      - name: sales_item_key
+        description: "MD5 hash surrogate key of order_id and product_id"
+        tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: "Primary business order identifier"
+        tests:
+          - not_null
+      - name: product_id
+        description: "Product identifier"
+        tests:
+          - not_null
+      - name: customer_id
+        description: "Customer identifier"
+        tests:
+          - not_null
+      - name: order_date
+        description: "Date the order was placed"
+        tests:
+          - not_null
+      - name: sales_amount
+        description: "Net revenue for the order line item"
+        tests:
+          - not_null
+      - name: quantity
+        description: "Order quantity"
+        tests:
+          - not_null

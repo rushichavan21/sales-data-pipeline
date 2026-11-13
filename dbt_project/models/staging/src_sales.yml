@@ -1,0 +1,30 @@
+version: 2
+
+sources:
+  - name: raw_sales
+    database: SALES_DW
+    schema: RAW
+    tables:
+      - name: raw_sales_parquet
+        description: "Raw curated Parquet data loaded into Snowflake from S3."
+        columns:
+          - name: row_id
+            description: "Unique row identifier from ingestion"
+          - name: order_id
+            description: "Business order identifier (e.g. CA-2024-1001)"
+          - name: product_id
+            description: "Product SKU identifier"
+          - name: customer_id
+            description: "Unique customer identifier"
+          - name: order_date
+            description: "Transaction order date"
+          - name: ship_date
+            description: "Order shipment date"
+          - name: sales
+            description: "Gross revenue amount"
+          - name: quantity
+            description: "Number of units purchased"
+          - name: discount
+            description: "Discount percentage rate applied"
+          - name: profit
+            description: "Net profit or loss amount"
