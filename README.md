@@ -140,8 +140,8 @@ _To be filled in as the project progresses._
 | Item | Status | Notes |
 |---|---|---|
 | Project Setup (Phase 0) | Completed | Repo skeleton, Python 3.12 venv, PySpark 3.5.9, winutils configured |
-| Local PySpark cleaning | In progress | Developing data cleaner, schema enforcement, quality checks & tests |
-| S3 storage | Not started | Phase 2 |
+| Local PySpark cleaning (Phase 1) | Completed | Schema enforcement, date standardization, deduplication, DQ assertions, partitioned Parquet write, pytest suite (4 passing tests) |
+| S3 storage (Phase 2) | In progress | S3 bucket creation, folder hierarchy (`raw/`, `curated/`), and data upload |
 | Athena queries | Not started | Phase 3 |
 | Glue job | Not started | Phase 4 |
 | Snowflake + dbt | Not started | Phase 5 |
