@@ -78,12 +78,13 @@ sales-data-pipeline/
 |   `-- test_clean_sales.py                  # Pytest unit tests for cleaning & DQ logic
 |-- sql/athena/
 |   |-- 00_create_curated_table.sql          # External table DDL with Parquet SerDe
+|   |-- 00_create_raw_csv_table.sql          # External table DDL over raw CSV for benchmarking
 |   |-- 01_monthly_sales_trends.sql          # MoM revenue & profit growth trends (LAG, CTE)
 |   |-- 02_top_profitable_products.sql       # Top 3 products per category (DENSE_RANK)
 |   |-- 03_customer_rfm_segmentation.sql     # Customer RFM scoring (NTILE, CASE)
 |   |-- 04_shipping_performance_by_region.sql# Shipping delay & SLA compliance metrics
 |   |-- 05_discount_impact_on_margins.sql    # Margin erosion by discount tiers
-|   `-- cost_comparison_csv_vs_parquet.md    # Detailed scan & cost comparison benchmark
+|   `-- cost_comparison_csv_vs_parquet.md    # Empirical Athena scan & cost comparison benchmark
 |-- snowflake/
 |   `-- setup.sql                            # Warehouse, database, schema & stage configuration
 |-- dbt_project/
@@ -103,6 +104,8 @@ sales-data-pipeline/
 |-- scripts/
 |   |-- generate_sales_dataset.py            # Synthetic retail dataset generator with messy anomalies
 |   |-- s3_manager.py                        # S3 bucket creation, upload, and teardown
+|   |-- athena_runner.py                     # Programmatic Athena query execution and stats capture
+|   |-- run_athena_benchmarks.py             # Athena test runner, verification, and benchmark suite
 |   |-- glue_runner.py                       # AWS Glue deployment, cost calculation, and execution
 |   `-- generate_architecture_diagram.py     # Generates docs/architecture.png
 `-- docs/
@@ -276,9 +279,9 @@ To ensure zero ongoing cloud spend after completing the project:
 |---|---|---|
 | **Phase 0: Environment Setup** | Completed | Python 3.12 venv, PySpark 3.5.9, winutils, directory structure, `.gitignore`, `.env.example` |
 | **Phase 1: Local PySpark Cleaning (Tier 1)** | Completed | Synthetic retail generator, schema enforcement, date parsing, DQ assertions, partitioned Parquet, 4 pytest unit tests |
-| **Phase 2: S3 Storage (Tier 1)** | Completed | Automated S3 manager script (`scripts/s3_manager.py`) with folder provisioning, recursive partition upload, and teardown |
-| **Phase 3: Athena Queries (Tier 1/2)** | Completed | External table DDL + 5 analytical SQL queries (window functions, CTEs, RFM segmentation, SLA compliance) + cost benchmark |
-| **Phase 4: AWS Glue Job (Tier 2)** | Completed | Portable PySpark script, automated deployer (`scripts/glue_runner.py`), upfront DPU cost estimator, least-privilege IAM policy |
+| **Phase 2: S3 Storage (Tier 1)** | Completed | Provisioned S3 bucket `s3://sales-pipeline-rushi-2026-unique`, raw CSV uploaded, and 242 curated partition objects synced via `scripts/s3_manager.py` |
+| **Phase 3: Athena Queries (Tier 1/2)** | Completed | External table repaired (48 partitions), row count (29,666) verified matching local PySpark, 5 analytical queries executed, and empirical CSV vs Parquet benchmarks executed (94.03% to 98.51% scan reductions) |
+| **Phase 4: AWS Glue Job (Tier 2)** | Ready to deploy | Portable PySpark script, automated deployer (`scripts/glue_runner.py`), upfront DPU cost estimator, least-privilege IAM policy |
 | **Phase 5: Snowflake & dbt (Tier 2)** | Completed | Snowflake setup DDL (X-Small, 60s suspend), dbt project (`stg_sales`, `dim_date`, `dim_customer`, `dim_product`, `fact_sales`), relationship & schema tests |
 | **Phase 6: Polish & Documentation** | Completed | Architecture graphic (`docs/architecture.png`), complete step-by-step reproduction runbook, teardown instructions |
 | **CloudFormation / Terraform (Tier 3)** | Skipped | Skipped as optional Tier 3 item; replaced by scripted Python CLI automation (`s3_manager.py`, `glue_runner.py`) |
