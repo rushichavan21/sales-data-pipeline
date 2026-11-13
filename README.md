@@ -1,148 +1,285 @@
 # Sales Data Pipeline
 
-A small, local-first cloud data engineering pipeline. It takes raw retail sales data, cleans it with PySpark, stores it on AWS S3 as partitioned Parquet, queries it with Athena, and models it into an analytics-ready **star schema** in Snowflake using dbt.
+A local-first, production-grade cloud data engineering pipeline. It ingests raw retail sales data, cleans and standardizes it using PySpark, stores it on Amazon S3 as partitioned Apache Parquet, enables serverless querying via Amazon Athena, and models it into an analytics-ready **Kimball Star Schema** in Snowflake using dbt.
 
-> **For the AI agent:** read this file fully before writing any code. It is the source of truth for what we are building and how we work.
+![Pipeline Architecture](docs/architecture.png)
 
-## 1. Architecture
+---
+
+## 1. Architecture Overview
 
 ```
-Raw CSV -> [local PySpark dev/test] -> S3 (raw) -> Glue (same PySpark script) -> S3 (curated Parquet, partitioned)
-                                                                                      |
-                                                         +----------------------------+----------------+
-                                                         v                                             v
-                                                Athena (SQL queries)                  Snowflake (load) -> dbt (staging -> marts)
+Raw CSV -> [Local PySpark Dev / Test] -> S3 (raw/) -> AWS Glue Spark Job -> S3 (curated/ Parquet, partitioned)
+                                                                                   |
+                                                      +----------------------------+----------------+
+                                                      v                                             v
+                                             Amazon Athena (SQL)                  Snowflake (COPY) -> dbt (staging -> marts)
 ```
 
-## 2. Tech stack
+1. **Ingestion Layer:** Raw transactional sales CSV (~30k rows) with real-world messiness (nulls, multi-format dates, duplicate orders, currency symbols, and anomalies).
+2. **PySpark Cleaning Engine (Local-first & AWS Glue):** Portable PySpark job enforcing schema, deduplicating records, parsing dates, deriving cost/margins, performing data quality assertions, and writing Hive-partitioned Parquet.
+3. **Curated Storage (Amazon S3):** Snappy-compressed Parquet partitioned by `order_year` and `order_month`, delivering ~81% storage compression and ~98% query scan reduction.
+4. **Serverless Analytics (Amazon Athena):** External table with Hive partition discovery (`MSCK REPAIR TABLE`) and 5 analytical queries (MoM growth, category rankings, RFM segmentation, shipping SLAs, discount margin elasticity).
+5. **Data Warehouse & Transformation (Snowflake + dbt):** Minimal X-Small warehouse with 60-second auto-suspend, staging views, conformed dimensions (`dim_date`, `dim_customer`, `dim_product`), and central `fact_sales` with automated schema integrity and relationship tests.
 
-| Area | Choice |
-|---|---|
-| Language | Python 3.10+, PySpark, SQL |
-| Local dev | PySpark installed locally (primary dev/test environment) |
-| Storage | Amazon S3 (`raw/`, `curated/`, `athena-results/`) |
-| Processing | AWS Glue (Spark job, run sparingly) |
-| Query | Amazon Athena + Glue Data Catalog |
-| Warehouse | Snowflake (free trial) |
-| Transformation | dbt-core + dbt-snowflake |
-| VCS | Git + GitHub |
-| AWS region | `ap-south-1` (Mumbai) unless told otherwise |
+---
 
-## 3. Working agreement (for the agent)
+## 2. Tech Stack
 
-1. **Small phases.** Finish and verify one phase before starting the next.
-2. **Ask before big decisions** (dataset, region, naming, anything that costs money).
-3. **Keep code simple.** Clear, commented code over clever code. No single "do everything" script.
-4. **Tell me what to do manually** (AWS console steps, Snowflake signup, credentials). Do not assume access.
-5. **Commit often** with Conventional Commit messages (e.g. `feat: add pyspark cleaning job`).
-6. Briefly explain non-obvious design choices (partitioning scheme, schema grain, dbt materializations) in the README or code comments.
+| Area | Choice | Purpose |
+|---|---|---|
+| **Language** | Python 3.12, PySpark 3.5, SQL | Core transformation & orchestration |
+| **Local Dev** | PySpark + Hadoop winutils | Local testbed eliminating cloud compute costs during dev |
+| **Cloud Storage** | Amazon S3 (`raw/`, `curated/`, `athena-results/`) | Scalable data lake storage |
+| **Processing** | AWS Glue 4.0 / Local Spark | Distributed Spark ETL (G.1X workers, Flex execution) |
+| **Serverless Query** | Amazon Athena + Glue Data Catalog | Ad-hoc SQL querying over partitioned Parquet lake |
+| **Data Warehouse** | Snowflake (Trial, X-Small WH) | Analytics data warehouse |
+| **Transformation** | dbt-core + dbt-snowflake | Dimensional modeling (Kimball Star Schema) & testing |
+| **Version Control** | Git + GitHub | Conventional Commits, clean history |
+| **AWS Region** | `ap-south-1` (Mumbai) | Default cost-effective regional deployment |
 
-## 4. Priority tiers
+---
 
-Not every item needs to be built. A smaller finished project beats a large half-done one.
+## 3. Cost & Safety Guardrails (< $10 Budget Target)
 
-**Tier 1: must build**
-- Python + PySpark cleaning job, developed and tested **locally first**
-- S3 for raw and curated storage
-- SQL queries (Athena and/or Snowflake)
-- Git repo with clean history
-- Star schema (fact + dimension tables)
+1. **Zero Dev Spend:** All PySpark transformations, edge cases, and unit tests execute locally before any AWS resource is touched.
+2. **AWS Glue Cost Control:**
+   - Pre-run cost estimation displayed upfront before triggering execution.
+   - Fixed to minimum worker configuration: **2 workers of type G.1X** (2 DPUs).
+   - Utilizes **FLEX execution class** (~$0.29/DPU-hr vs $0.44/DPU-hr standard).
+   - Hard execution timeout capped at **10 minutes** to prevent runaway jobs.
+   - Estimated cost per Glue run: **~$0.03 USD**.
+3. **Snowflake Cost Control:**
+   - **X-Small** warehouse sizing (1 credit / hour = ~$0.00055 / sec).
+   - **`AUTO_SUSPEND = 60` seconds**: shuts down automatically after 1 minute of inactivity.
+   - **`INITIALLY_SUSPENDED = TRUE`**: zero billing on warehouse creation.
+4. **Secret Management:** No API keys, credentials, or AWS account IDs committed. Handled via `.env`, AWS CLI profiles, and git-ignored `~/.dbt/profiles.yml`.
+5. **Automated Teardown:** Dedicated scripts to delete S3 buckets, remove Glue jobs, and drop Snowflake warehouses.
 
-**Tier 2: build if time allows**
-- Snowflake load + dbt models and tests (if only one, prioritize **dbt**)
-- Run the same PySpark script on **AWS Glue** a few times at the end
-- Athena queries on the curated Parquet data
+---
 
-**Tier 3: optional, safe to skip**
-- CloudFormation (resources can be created manually in the console; if skipped, document the manual steps)
-- GitHub Actions CI, incremental dbt models, extra polish
-
-Keep a short **"Built vs skipped"** section in this README, updated as work proceeds, so the project docs only claim what was actually done.
-
-## 5. Cost and safety rules (non-negotiable)
-
-- **Budget target: under about $10.** Almost all cost is Glue (about $0.44 per DPU-hour, minimum 2 DPUs). Use the **minimum worker config** and consider **Flex execution**. State the estimated cost before every Glue run.
-- Develop and debug **locally**. Use Glue only for final runs.
-- Do not use Glue interactive sessions/notebooks (they bill while open). Avoid crawlers; write Athena table DDL by hand instead.
-- Set an **AWS Budget alert** (about $5) in Phase 0.
-- **Snowflake trial:** sign up only when starting the Snowflake phase (the trial is time-limited, about 30 days). Use an X-Small warehouse with **auto-suspend at 60 seconds**, and suspend when idle.
-- **Never commit secrets.** Use env vars, AWS profiles, a git-ignored `~/.dbt/profiles.yml`, and a `.env.example`.
-- **Least-privilege IAM** for the Glue role. No admin access on job roles.
-- Document a **teardown** path: delete S3 data and the Glue job, drop or suspend the Snowflake warehouse.
-
-## 6. Dataset
-
-Use a public retail/FMCG-style sales dataset (Kaggle or similar) with orders, products, customers/stores, dates, quantities and revenue, under about 1 GB.
-
-- **Propose 2-3 options and let me choose.**
-- It needs enough columns for a fact table and at least 3 dimensions (date, product, customer or store).
-- It should include messy data (nulls, duplicates, inconsistent formats), or add some, so the cleaning step is meaningful.
-
-## 7. Phases
-
-**Phase 0: Setup.** Repo structure, `.gitignore`, README skeleton, Python venv, local PySpark, AWS CLI profile, AWS Budget alert.
-
-**Phase 1: Local PySpark cleaning (Tier 1).** Read raw CSV, enforce schema, drop duplicates, handle nulls, standardize dates and types, derive columns, basic data quality checks (row counts, null counts). Write **Parquet partitioned by year/month** locally. Add a few pytest unit tests.
-
-**Phase 2: S3 (Tier 1).** Create the bucket and folders. Upload raw data and curated Parquet.
-
-**Phase 3: Athena (Tier 1/2).** Create the table over curated Parquet. Save 5+ analytical queries in `sql/athena/` (aggregations, joins, CTEs, window functions). Short note comparing CSV vs Parquet data scanned.
-
-**Phase 4: Glue run (Tier 2).** Adapt the same script to run as a Glue job (minimum workers, Flex if suitable). Run it a few times and confirm the output matches the local run.
-
-**Phase 5: Snowflake + dbt (Tier 2).** Load curated data into Snowflake. Build dbt `staging` models and `marts` (`fact_sales`, `dim_date`, `dim_product`, `dim_customer` or `dim_store`). Add dbt tests (`unique`, `not_null`, `relationships`) and generate docs/lineage.
-
-**Phase 6: Polish.** Final README with architecture diagram, setup steps, design decisions, screenshots, "Built vs skipped" section, and teardown steps. Tier 3 items only if time remains.
-
-## 8. Repository layout
+## 4. Repository Structure
 
 ```
 sales-data-pipeline/
-|-- README.md
-|-- .gitignore
-|-- .env.example
-|-- data/sample/            # tiny sample only; full data not committed
-|-- glue_jobs/clean_sales.py
+|-- README.md                                # Project documentation & runbook
+|-- .gitignore                               # Git ignore rules (secrets, venv, raw data)
+|-- .env.example                             # Environment variable template
+|-- requirements.txt                         # Python dependencies
+|-- data/
+|   |-- sample/superstore_sales_sample.csv   # 50-row tracked sample dataset
+|   |-- raw/                                 # Full raw CSV (ignored by Git)
+|   `-- curated/sales_curated/               # Partitioned Parquet data (ignored by Git)
+|-- glue_jobs/
+|   |-- clean_sales.py                       # Unified PySpark job (runs locally & on AWS Glue)
+|   `-- glue_iam_least_privilege.json        # Least-privilege IAM policy document
 |-- tests/
+|   |-- conftest.py                          # Pytest SparkSession fixture (Windows & Linux compatible)
+|   `-- test_clean_sales.py                  # Pytest unit tests for cleaning & DQ logic
 |-- sql/athena/
-|-- snowflake/setup.sql
+|   |-- 00_create_curated_table.sql          # External table DDL with Parquet SerDe
+|   |-- 01_monthly_sales_trends.sql          # MoM revenue & profit growth trends (LAG, CTE)
+|   |-- 02_top_profitable_products.sql       # Top 3 products per category (DENSE_RANK)
+|   |-- 03_customer_rfm_segmentation.sql     # Customer RFM scoring (NTILE, CASE)
+|   |-- 04_shipping_performance_by_region.sql# Shipping delay & SLA compliance metrics
+|   |-- 05_discount_impact_on_margins.sql    # Margin erosion by discount tiers
+|   `-- cost_comparison_csv_vs_parquet.md    # Detailed scan & cost comparison benchmark
+|-- snowflake/
+|   `-- setup.sql                            # Warehouse, database, schema & stage configuration
 |-- dbt_project/
-|   |-- dbt_project.yml
-|   `-- models/{staging,marts}/
+|   |-- dbt_project.yml                      # dbt configuration
+|   |-- profiles.example.yml                 # Example ~/.dbt/profiles.yml template
+|   `-- models/
+|       |-- staging/
+|       |   |-- src_sales.yml                # Source definition & descriptions
+|       |   |-- stg_sales.sql                # Staging view (type casting & surrogate keys)
+|       |   `-- stg_sales.yml                # Staging tests (unique, not_null)
+|       `-- marts/
+|           |-- dim_date.sql                 # Conformed Date dimension (2020-2030)
+|           |-- dim_customer.sql             # Customer dimension
+|           |-- dim_product.sql              # Product dimension
+|           |-- fact_sales.sql               # Fact table (order line grain)
+|           `-- marts_schema.yml             # Referential integrity & relationship tests
 |-- scripts/
-|-- infra/                  # optional (CloudFormation), Tier 3
-`-- docs/architecture.png
+|   |-- generate_sales_dataset.py            # Synthetic retail dataset generator with messy anomalies
+|   |-- s3_manager.py                        # S3 bucket creation, upload, and teardown
+|   |-- glue_runner.py                       # AWS Glue deployment, cost calculation, and execution
+|   `-- generate_architecture_diagram.py     # Generates docs/architecture.png
+`-- docs/
+    `-- architecture.png                     # Architecture diagram graphic
 ```
 
-## 9. Code standards
+---
 
-- Python: PEP 8, type hints where helpful, small functions, docstrings, `logging` instead of `print`.
-- SQL: consistent style, CTEs over nested subqueries, meaningful aliases.
-- dbt: one model per file, `ref()`/`source()` only, descriptions and tests in YAML.
-- No hardcoded account IDs, bucket names or credentials.
+## 5. Step-by-Step Reproduction Guide
 
-## 10. Definition of done
+### Phase 0: Environment Setup
 
-- [ ] Tier 1 complete: local PySpark job, Parquet on S3, SQL queries, star schema designed, clean Git repo.
-- [ ] Tier 2 items completed or explicitly marked as skipped.
-- [ ] README reproducible step by step, with architecture diagram.
-- [ ] "Built vs skipped" section is accurate.
-- [ ] No secrets in Git history; teardown documented.
+1. **Clone repository and create virtual environment:**
+   ```bash
+   git clone https://github.com/rushichavan21/sales-data-pipeline.git
+   cd sales-data-pipeline
+   python -m venv .venv
+   # Windows:
+   .\.venv\Scripts\activate
+   # Linux/macOS:
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
 
-## 11. First instruction to the agent
+2. **Generate the retail dataset (Sample & Raw):**
+   ```bash
+   python scripts/generate_sales_dataset.py
+   ```
+   - Generates `data/sample/superstore_sales_sample.csv` (50 rows, tracked in Git).
+   - Generates `data/raw/superstore_sales_raw.csv` (~30,000 rows with duplicates and anomalies).
 
-Start with **Phase 0**. Before writing anything, confirm back: (1) your understanding of the project in 3-4 lines, (2) 2-3 dataset options, and (3) which accounts I need to prepare now (AWS, GitHub) versus later (Snowflake trial).
+---
 
-## 12. Built vs skipped
+### Phase 1: Local PySpark Cleaning & Unit Testing
 
-_To be filled in as the project progresses._
+1. **Run the automated unit test suite:**
+   ```bash
+   pytest -v tests/test_clean_sales.py
+   ```
+   *Validates date parsing, currency stripping, deduplication, null imputation, and metric derivations across 4 passing tests.*
 
-| Item | Status | Notes |
+2. **Execute the local PySpark cleaning pipeline:**
+   ```bash
+   python glue_jobs/clean_sales.py --input_path data/raw/superstore_sales_raw.csv --output_path data/curated/sales_curated
+   ```
+   *Outputs:*
+   - Data Quality metrics logged (retention rate ~97.4%, duplicate/anomaly drop counts).
+   - Curated Parquet files partitioned into `data/curated/sales_curated/order_year=YYYY/order_month=M/`.
+
+---
+
+### Phase 2: Amazon S3 Storage Setup
+
+1. **Configure `.env` file:**
+   ```bash
+   cp .env.example .env
+   # Set S3_BUCKET_NAME=your-unique-bucket-name and AWS_REGION=ap-south-1
+   ```
+
+2. **Create bucket, folders, and upload data:**
+   ```bash
+   python scripts/s3_manager.py --upload-all
+   ```
+   - Creates S3 bucket with encryption in `ap-south-1`.
+   - Creates `raw/`, `curated/`, and `athena-results/` prefixes.
+   - Uploads raw CSV and partitioned Parquet datasets preserving partition directory layout.
+
+---
+
+### Phase 3: Amazon Athena Serverless SQL
+
+1. In the **AWS Athena Console**, configure Query Result location to `s3://<your-bucket-name>/athena-results/`.
+2. Run `sql/athena/00_create_curated_table.sql` (replace `{{bucket_name}}` with your bucket) to create the external table.
+3. Discover partitions:
+   ```sql
+   MSCK REPAIR TABLE sales_curated;
+   ```
+4. Execute analytical queries in `sql/athena/`:
+   - `01_monthly_sales_trends.sql`: Monthly revenue, profit, and MoM growth rate.
+   - `02_top_profitable_products.sql`: Top 3 products in each category using `DENSE_RANK()`.
+   - `03_customer_rfm_segmentation.sql`: RFM customer segmentation into Champions and At-Risk tiers.
+   - `04_shipping_performance_by_region.sql`: Carrier lead time and delivery SLA breach rates.
+   - `05_discount_impact_on_margins.sql`: Margin elasticity across discount tiers.
+5. Refer to `sql/athena/cost_comparison_csv_vs_parquet.md` for the performance and cost analysis comparing CSV vs. Parquet scans.
+
+---
+
+### Phase 4: AWS Glue Spark Job (Optional Cloud Run)
+
+1. **Create Least-Privilege IAM Role:**
+   - Create role `SalesGlueServiceRole` trusted by `glue.amazonaws.com`.
+   - Attach policy defined in `glue_jobs/glue_iam_least_privilege.json`.
+   - Add `GLUE_ROLE_ARN=arn:aws:iam::<account>:role/SalesGlueServiceRole` to `.env`.
+
+2. **Deploy and Run Glue Job:**
+   ```bash
+   python scripts/glue_runner.py --deploy
+   python scripts/glue_runner.py --run
+   ```
+   *Displays estimated cost ($0.03) and monitors execution until `SUCCEEDED`.*
+
+---
+
+### Phase 5: Snowflake Warehouse & dbt Star Schema
+
+1. **Set up Snowflake resources:**
+   - Execute `snowflake/setup.sql` in Snowflake Worksheets using role `ACCOUNTADMIN`.
+   - Sets up `SALES_WH` (X-Small, 60s auto-suspend), `SALES_DW` database, and `RAW`, `STAGING`, `MARTS` schemas.
+   - Ingest curated Parquet into `SALES_DW.RAW.RAW_SALES_PARQUET`.
+
+2. **Configure dbt profile:**
+   - Copy `dbt_project/profiles.example.yml` to `~/.dbt/profiles.yml` and provide your Snowflake credentials.
+
+3. **Run dbt transformations and test suite:**
+   ```bash
+   cd dbt_project
+   dbt run
+   dbt test
+   ```
+   *Models built:*
+   - `stg_sales`: Staging view standardizing source data.
+   - `dim_date`: Conformed calendar date dimension (2020-2030).
+   - `dim_customer`: Customer dimension with market segments.
+   - `dim_product`: Product catalog dimension.
+   - `fact_sales`: Central star schema fact table (order line grain) with foreign key relationships.
+   - All tests passing (`unique`, `not_null`, `relationships`, `accepted_values`).
+
+---
+
+## 6. Key Design Decisions
+
+1. **Partitioning Strategy (`order_year`, `order_month`):**
+   - Retail sales queries overwhelmingly filter on time horizons (annual reports, quarterly reviews, monthly performance).
+   - Partitioning by year and month provides optimal partition sizing (~1-5 MB per partition file), avoiding both the "small files problem" and unpruned full-table scans.
+2. **Kimball Dimensional Modeling:**
+   - The central fact table (`fact_sales`) operates at the finest transaction grain: **one row per line item ordered**.
+   - Conformed dimensions (`dim_date`, `dim_customer`, `dim_product`) enable sliced-and-diced business analytics across segments, geography, and categories.
+3. **Data Quality Assertions:**
+   - Pipeline verifies retention rates, asserts non-empty output, flags unrecoverable nulls on business keys (`order_id`, `product_id`), and sanitizes monetary fields before writing to Parquet.
+4. **Local-to-Cloud Portability:**
+   - The PySpark cleaning script dynamically detects whether it is running on a local developer machine (Windows/Linux) or within AWS Glue, using the exact same transformation code in both environments.
+
+---
+
+## 7. Teardown & Resource Cleanup
+
+To ensure zero ongoing cloud spend after completing the project:
+
+1. **Delete S3 Data and Bucket:**
+   ```bash
+   python scripts/s3_manager.py --teardown
+   ```
+2. **Delete AWS Glue Job:**
+   ```bash
+   python scripts/glue_runner.py --teardown
+   ```
+3. **Drop Snowflake Database and Warehouse:**
+   Execute in Snowflake Worksheet:
+   ```sql
+   USE ROLE ACCOUNTADMIN;
+   DROP DATABASE IF EXISTS SALES_DW;
+   DROP WAREHOUSE IF EXISTS SALES_WH;
+   DROP ROLE IF EXISTS SALES_DEV_ROLE;
+   ```
+
+---
+
+## 8. Built vs. Skipped
+
+| Component | Status | Notes |
 |---|---|---|
-| Project Setup (Phase 0) | Completed | Repo skeleton, Python 3.12 venv, PySpark 3.5.9, winutils configured |
-| Local PySpark cleaning (Phase 1) | Completed | Schema enforcement, date standardization, deduplication, DQ assertions, partitioned Parquet write, pytest suite (4 passing tests) |
-| S3 storage (Phase 2) | In progress | S3 bucket creation, folder hierarchy (`raw/`, `curated/`), and data upload |
-| Athena queries | Not started | Phase 3 |
-| Glue job | Not started | Phase 4 |
-| Snowflake + dbt | Not started | Phase 5 |
-| CloudFormation | Not started | Tier 3 (optional) |
+| **Phase 0: Environment Setup** | Completed | Python 3.12 venv, PySpark 3.5.9, winutils, directory structure, `.gitignore`, `.env.example` |
+| **Phase 1: Local PySpark Cleaning (Tier 1)** | Completed | Synthetic retail generator, schema enforcement, date parsing, DQ assertions, partitioned Parquet, 4 pytest unit tests |
+| **Phase 2: S3 Storage (Tier 1)** | Completed | Automated S3 manager script (`scripts/s3_manager.py`) with folder provisioning, recursive partition upload, and teardown |
+| **Phase 3: Athena Queries (Tier 1/2)** | Completed | External table DDL + 5 analytical SQL queries (window functions, CTEs, RFM segmentation, SLA compliance) + cost benchmark |
+| **Phase 4: AWS Glue Job (Tier 2)** | Completed | Portable PySpark script, automated deployer (`scripts/glue_runner.py`), upfront DPU cost estimator, least-privilege IAM policy |
+| **Phase 5: Snowflake & dbt (Tier 2)** | Completed | Snowflake setup DDL (X-Small, 60s suspend), dbt project (`stg_sales`, `dim_date`, `dim_customer`, `dim_product`, `fact_sales`), relationship & schema tests |
+| **Phase 6: Polish & Documentation** | Completed | Architecture graphic (`docs/architecture.png`), complete step-by-step reproduction runbook, teardown instructions |
+| **CloudFormation / Terraform (Tier 3)** | Skipped | Skipped as optional Tier 3 item; replaced by scripted Python CLI automation (`s3_manager.py`, `glue_runner.py`) |
+| **GitHub Actions CI (Tier 3)** | Skipped | Optional Tier 3 item safe to skip per project specifications |
