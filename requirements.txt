@@ -9,3 +9,8 @@ boto3>=1.35.0
 # Testing and utilities
 pytest>=8.0.0
 python-dotenv>=1.0.0
+pillow>=10.0.0
+
+# Snowflake and dbt (Phase 5)
+dbt-core>=1.8.0
+dbt-snowflake>=1.8.0
