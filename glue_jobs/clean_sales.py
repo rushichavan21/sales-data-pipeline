@@ -44,10 +44,16 @@ def init_spark_session(
     try:
         from awsglue.context import GlueContext  # type: ignore
         from awsglue.job import Job  # type: ignore
+        from awsglue.utils import getResolvedOptions  # type: ignore
 
         spark = SparkSession.builder.appName(app_name).getOrCreate()
         glue_context = GlueContext(spark.sparkContext)
         glue_job = Job(glue_context)
+        try:
+            glue_args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+            glue_job.init(glue_args["JOB_NAME"], glue_args)
+        except Exception:
+            pass
         logger.info("Initialized AWS Glue execution context.")
         return spark, glue_context, glue_job
     except ImportError:

@@ -3,9 +3,9 @@
 Adheres strictly to project cost and safety rules:
 - Pre-calculates and displays estimated DPU costs before running
 - Configures minimum worker count (2 workers, G.1X)
-- Uses FLEX execution class where available to minimize costs
+- Uses FLEX execution class to minimize costs (~$0.29/DPU-hr)
 - Least-privilege configuration with short execution timeout (10 mins)
-- Includes teardown capability
+- Separate curated-glue/ prefix to preserve baseline curated/ data
 """
 
 import argparse
@@ -35,8 +35,7 @@ DPU_HOURLY_RATE_FLEX = 0.29
 
 def estimate_glue_cost(num_workers: int = 2, expected_duration_minutes: float = 3.0, is_flex: bool = True) -> float:
     """Calculate and display upfront estimated Glue job cost."""
-    # 2 G.1X workers = 2 DPUs. Glue 3.0+ minimum billable execution time is 1 minute.
-    dpus = num_workers
+    dpus = num_workers  # 2 G.1X workers = 2 DPUs
     rate = DPU_HOURLY_RATE_FLEX if is_flex else DPU_HOURLY_RATE_STANDARD
     hours = expected_duration_minutes / 60.0
     est_cost = dpus * rate * hours
@@ -44,13 +43,21 @@ def estimate_glue_cost(num_workers: int = 2, expected_duration_minutes: float = 
 
 
 def get_glue_client(region_name: str = "ap-south-1", profile_name: Optional[str] = None):
-    session = boto3.Session(profile_name=profile_name, region_name=region_name)
-    return session.client("glue")
+    return boto3.client(
+        "glue",
+        region_name=region_name,
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    )
 
 
 def get_s3_client(region_name: str = "ap-south-1", profile_name: Optional[str] = None):
-    session = boto3.Session(profile_name=profile_name, region_name=region_name)
-    return session.client("s3")
+    return boto3.client(
+        "s3",
+        region_name=region_name,
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    )
 
 
 def upload_glue_script(s3_client, bucket_name: str, local_script: str = "glue_jobs/clean_sales.py") -> str:
@@ -59,7 +66,7 @@ def upload_glue_script(s3_client, bucket_name: str, local_script: str = "glue_jo
     logger.info("Uploading %s to s3://%s/%s...", local_script, bucket_name, s3_key)
     s3_client.upload_file(local_script, bucket_name, s3_key)
     script_location = f"s3://{bucket_name}/{s3_key}"
-    logger.info("Glue script ready at: %s", script_location)
+    logger.info("Glue script uploaded successfully to: %s", script_location)
     return script_location
 
 
@@ -69,6 +76,7 @@ def create_or_update_glue_job(
     role_arn: str,
     script_s3_location: str,
     bucket_name: str,
+    output_prefix: str = "curated-glue/sales_curated",
     use_flex: bool = True,
 ):
     """Create or update AWS Glue Spark job with minimal worker configuration."""
@@ -76,14 +84,29 @@ def create_or_update_glue_job(
     worker_type = "G.1X"
     execution_class = "FLEX" if use_flex else "STANDARD"
 
+    input_location = f"s3://{bucket_name}/raw/superstore_sales_raw.csv"
+    output_location = f"s3://{bucket_name}/{output_prefix}"
+
     est_cost = estimate_glue_cost(num_workers=num_workers, expected_duration_minutes=3.0, is_flex=use_flex)
-    logger.info("---------------------------------------------------------")
-    logger.info("GLUE COST ESTIMATE:")
-    logger.info("Workers: %d x %s (2 DPUs)", num_workers, worker_type)
-    logger.info("Execution Class: %s", execution_class)
-    logger.info("Estimated runtime: ~2-3 minutes")
-    logger.info("Estimated cost for this run: ~$%.4f USD (well within $10 budget)", est_cost)
-    logger.info("---------------------------------------------------------")
+    
+    print("\n=========================================================")
+    print("           AWS GLUE JOB DEPLOYMENT DETAILS              ")
+    print("=========================================================")
+    print(f"Job Name:            {job_name}")
+    print(f"IAM Role ARN:        {role_arn}")
+    print(f"Worker Count:        {num_workers} workers")
+    print(f"Worker Type:         {worker_type} (1 DPU per worker = 2 DPUs total)")
+    print(f"Execution Class:     {execution_class} (~$0.29 / DPU-hour)")
+    print(f"Glue Version:        4.0 (Apache Spark 3.3, Python 3.10)")
+    print(f"Max Safety Timeout:  10 minutes")
+    print(f"Script S3 Location:  {script_s3_location}")
+    print(f"Input Location:      {input_location}")
+    print(f"Output Location:     {output_location}")
+    print("---------------------------------------------------------")
+    print(f"COST ESTIMATE:")
+    print(f"Estimated Duration:  ~2 to 3 minutes")
+    print(f"Estimated Cost:      ~${est_cost:.4f} USD (well within $5 budget alert)")
+    print("=========================================================\n")
 
     job_kwargs = {
         "Name": job_name,
@@ -100,11 +123,11 @@ def create_or_update_glue_job(
             "--enable-continuous-cloudwatch-log": "true",
             "--TempDir": f"s3://{bucket_name}/temp/",
             "--spark-event-logs-path": f"s3://{bucket_name}/spark-events/",
-            "--input_path": f"s3://{bucket_name}/raw/superstore_sales_raw.csv",
-            "--output_path": f"s3://{bucket_name}/curated/sales_curated",
+            "--input_path": input_location,
+            "--output_path": output_location,
         },
         "MaxRetries": 0,
-        "Timeout": 10,  # 10 minutes max safety timeout
+        "Timeout": 10,
         "GlueVersion": "4.0",
         "NumberOfWorkers": num_workers,
         "WorkerType": worker_type,
@@ -113,7 +136,7 @@ def create_or_update_glue_job(
 
     try:
         glue_client.get_job(JobName=job_name)
-        logger.info("Updating existing Glue job: %s", job_name)
+        logger.info("Updating existing Glue job definition: %s", job_name)
         glue_client.update_job(JobName=job_name, JobUpdate=job_kwargs)
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") == "EntityNotFoundException":
@@ -122,38 +145,62 @@ def create_or_update_glue_job(
         else:
             raise
 
-    logger.info("Glue job configured successfully: %s", job_name)
+    logger.info("Glue job configured and ready: %s", job_name)
 
 
-def trigger_glue_job_run(glue_client, job_name: str, bucket_name: str):
-    """Trigger Glue job run and monitor execution."""
+def trigger_glue_job_run(glue_client, job_name: str, bucket_name: str, output_prefix: str = "curated-glue/sales_curated"):
+    """Trigger Glue job run and monitor execution once."""
+    input_location = f"s3://{bucket_name}/raw/superstore_sales_raw.csv"
+    output_location = f"s3://{bucket_name}/{output_prefix}"
+
     logger.info("Triggering run for job '%s'...", job_name)
-    response = glue_client.start_job_run(
-        JobName=job_name,
-        Arguments={
-            "--input_path": f"s3://{bucket_name}/raw/superstore_sales_raw.csv",
-            "--output_path": f"s3://{bucket_name}/curated/sales_curated",
-        },
-    )
+    logger.info("Writing curated output to: %s", output_location)
+
+    try:
+        response = glue_client.start_job_run(
+            JobName=job_name,
+            Arguments={
+                "--input_path": input_location,
+                "--output_path": output_location,
+            },
+        )
+    except ClientError as e:
+        logger.error("Failed to start Glue job run: %s", e)
+        raise
+
     job_run_id = response["JobRunId"]
     logger.info("Job run started with Run ID: %s", job_run_id)
 
-    # Monitor run
+    # Monitor run until terminal state
     start_time = time.time()
     while True:
         status_res = glue_client.get_job_run(JobName=job_name, RunId=job_run_id)
-        run_state = status_res["JobRun"]["JobRunState"]
+        run_info = status_res["JobRun"]
+        run_state = run_info["JobRunState"]
         elapsed = round(time.time() - start_time)
         logger.info("Job status [%ds]: %s", elapsed, run_state)
 
         if run_state in ("SUCCEEDED", "STOPPED", "FAILED", "TIMEOUT", "ERROR"):
             if run_state == "SUCCEEDED":
-                dpu_seconds = status_res["JobRun"].get("DPUSeconds", 0)
+                dpu_seconds = run_info.get("DPUSeconds", 0)
                 actual_cost = round((dpu_seconds / 3600.0) * DPU_HOURLY_RATE_FLEX, 4)
-                logger.info("Job SUCCEEDED! DPU Seconds used: %s, Actual cost: ~$%.4f USD", dpu_seconds, actual_cost)
+                print("\n=========================================================")
+                print("                 GLUE JOB SUCCEEDED!                     ")
+                print("=========================================================")
+                print(f"Job Run ID:       {job_run_id}")
+                print(f"Total Time:       {elapsed} seconds")
+                print(f"DPU Seconds:      {dpu_seconds}")
+                print(f"Actual Cost:      ~${actual_cost:.4f} USD")
+                print(f"Output Location:  {output_location}")
+                print("=========================================================\n")
             else:
-                err_msg = status_res["JobRun"].get("ErrorMessage", "Unknown error")
-                logger.error("Job ended with state %s: %s", run_state, err_msg)
+                err_msg = run_info.get("ErrorMessage", "Unknown error")
+                print("\n=========================================================")
+                print("                   GLUE JOB FAILED!                      ")
+                print("=========================================================")
+                print(f"State:            {run_state}")
+                print(f"Error Message:    {err_msg}")
+                print("=========================================================\n")
             break
 
         time.sleep(15)
@@ -171,8 +218,9 @@ def teardown_glue_job(glue_client, job_name: str):
 def main():
     parser = argparse.ArgumentParser(description="AWS Glue Job Orchestrator")
     parser.add_argument("--job-name", default="sales-data-cleaner-job")
-    parser.add_argument("--bucket", default=os.getenv("S3_BUCKET_NAME"))
+    parser.add_argument("--bucket", default=os.getenv("S3_BUCKET_NAME", "sales-pipeline-rushi-2026-unique"))
     parser.add_argument("--role-arn", default=os.getenv("GLUE_ROLE_ARN"))
+    parser.add_argument("--output-prefix", default="curated-glue/sales_curated", help="S3 prefix for Glue output")
     parser.add_argument("--region", default=os.getenv("AWS_REGION", "ap-south-1"))
     parser.add_argument("--profile", default=os.getenv("AWS_PROFILE"))
     parser.add_argument("--deploy", action="store_true", help="Upload script and create/update Glue job")
@@ -197,10 +245,22 @@ def main():
             logger.error("Glue IAM Role ARN is required for deploy. Pass --role-arn or set GLUE_ROLE_ARN in .env.")
             sys.exit(1)
         script_loc = upload_glue_script(s3_client, args.bucket)
-        create_or_update_glue_job(glue_client, args.job_name, args.role_arn, script_loc, args.bucket)
+        create_or_update_glue_job(
+            glue_client,
+            job_name=args.job_name,
+            role_arn=args.role_arn,
+            script_s3_location=script_loc,
+            bucket_name=args.bucket,
+            output_prefix=args.output_prefix,
+        )
 
     if args.run:
-        trigger_glue_job_run(glue_client, args.job_name, args.bucket)
+        trigger_glue_job_run(
+            glue_client,
+            job_name=args.job_name,
+            bucket_name=args.bucket,
+            output_prefix=args.output_prefix,
+        )
 
 
 if __name__ == "__main__":
