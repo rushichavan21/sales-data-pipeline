@@ -43,6 +43,10 @@ winutils.exe
 *.key
 profiles.yml
 
+# Learning documentation (local only)
+learn_this/
+learn this/
+
 # Data files (raw & curated data excluded; sample retained)
 data/raw/
 data/curated/
