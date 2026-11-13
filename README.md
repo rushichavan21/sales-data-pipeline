@@ -137,11 +137,12 @@ Start with **Phase 0**. Before writing anything, confirm back: (1) your understa
 
 _To be filled in as the project progresses._
 
-| Item | Status |
-|---|---|
-| Local PySpark cleaning | Not started |
-| S3 storage | Not started |
-| Athena queries | Not started |
-| Glue job | Not started |
-| Snowflake + dbt | Not started |
-| CloudFormation | Not started |
+| Item | Status | Notes |
+|---|---|---|
+| Project Setup (Phase 0) | Completed | Repo skeleton, Python 3.12 venv, PySpark 3.5.9, winutils configured |
+| Local PySpark cleaning | In progress | Developing data cleaner, schema enforcement, quality checks & tests |
+| S3 storage | Not started | Phase 2 |
+| Athena queries | Not started | Phase 3 |
+| Glue job | Not started | Phase 4 |
+| Snowflake + dbt | Not started | Phase 5 |
+| CloudFormation | Not started | Tier 3 (optional) |
